@@ -1,10 +1,10 @@
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 from model import Transformer  
 from prepare import prepare_data  
 import tiktoken
+import tqdm
 
 batch_size = 128
 block_size = 128
@@ -26,17 +26,13 @@ n = int(0.9 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
-train_dataset = TensorDataset(train_data)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-val_dataset = TensorDataset(val_data)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-
 def get_batch(split):
-    if split == 'train':
-        return next(iter(train_loader))[0].to(device)
-    else :
-        return next(iter(val_loader))[0].to(device)
+    data = train_data if split == 'train' else val_data
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([data[i:i + block_size] for i in ix])
+    y = torch.stack([data[i + 1:i + block_size + 1] for i in ix])
+    x, y = x.to(device), y.to(device)
+    return x, y
 
 def estimate_loss(model):
     model.eval()
@@ -60,13 +56,14 @@ model = Transformer(
     vocab_size=vocab_size, 
     max_length=block_size, 
     forward_expansion=4, 
-    dropout=0.1
+    dropout=0.1,
+    device=device
 ).to(device)
 
 optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.1)
 
-for iter in range(max_iters):
+for iter in tqdm.tqdm(range(max_iters)):
     if iter % eval_interval == 0:
         losses = estimate_loss(model)
         print(f"Step {iter}: Train loss = {losses['train']:.4f}, Val loss = {losses['val']:.4f}")
@@ -80,10 +77,9 @@ for iter in range(max_iters):
     if (iter + 1) % accumulation_steps == 0:
         optimizer.step()
         optimizer.zero_grad()
-    
-    scheduler.step()
+        scheduler.step()
 
-def generate_text(model, start_text=None, max_length=100, temperature = 1.0, device = device):
+def generate_text(model, device, start_text=None, max_length=100, temperature = 1.0):
     model.eval()
     if start_text is None:
         input_ids = torch.tensor([enc.encode("<endoftext>"[0])], dtype=torch.long).to(device)
@@ -100,7 +96,7 @@ def generate_text(model, start_text=None, max_length=100, temperature = 1.0, dev
 
     return enc.decode(input_ids[0].tolist())
 
-def generate_multiple_texts(model, max_length, temperature = 1.0, device = device):
+def generate_multiple_texts(model, device, max_length, temperature = 1.0):
     samples = []
     start_texts = [
         "Harry looked around and saw",
@@ -112,12 +108,12 @@ def generate_multiple_texts(model, max_length, temperature = 1.0, device = devic
         "A loud noise echoed through the castle",
         "Dumbledore turned to Harry and said",
         "The spell backfired and",
-        None,
+        "Harry stood in the"
     ]
     for start_text in start_texts:
-        samples.append(generate_text(model, start_text, max_length, temperature, device))
+        samples.append(generate_text(model, device, start_text, max_length, temperature))
     return samples
 
 # generate text
-for i, text in enumerate(generate_multiple_texts(model, 100, 0.8, device)):
+for i, text in enumerate(generate_multiple_texts(model, device, 100, 0.8)):
     print(f"Text {i + 1}: {text}")

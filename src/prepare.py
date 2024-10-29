@@ -1,5 +1,6 @@
 import os
 
+# train data: Harry Potter
 def prepare_data(data_dir):
     data = ""
     for filename in os.listdir(data_dir):
