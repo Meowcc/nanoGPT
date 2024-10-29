@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+
 
 class SelfAttention(nn.Module):
     def __init__(self, embed_size, heads):
@@ -20,10 +22,13 @@ class SelfAttention(nn.Module):
         N = query.shape[0]
         value_len, key_len, query_len = values.shape[1], keys.shape[1], query.shape[1]
         
-        values = values.reshape(N, value_len, self.heads, self.head_dim)
-        keys = keys.reshape(N, key_len, self.heads, self.head_dim)
-        queries = query.reshape(N, query_len, self.heads, self.head_dim)
-
+        # values = values.reshape(N, value_len, self.heads, self.head_dim)
+        # keys = keys.reshape(N, key_len, self.heads, self.head_dim)
+        # queries = query.reshape(N, query_len, self.heads, self.head_dim)
+        values = self.values(values).view(N, value_len, self.heads, self.head_dim)
+        keys = self.keys(keys).view(N, key_len, self.heads, self.head_dim)
+        queries =  self.queries(query).view(N, query_len, self.heads, self.head_dim)
+        
         energy = torch.einsum("nqhd,nkhd->nhqk", [queries, keys])
 
         if mask is not None:
@@ -37,9 +42,24 @@ class SelfAttention(nn.Module):
         out = self.fc_out(out)
         return out
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, embed_size, max_length):
+        super(PositionalEncoding, self).__init__()
+        self.encoding = torch.zeros(max_length, embed_size)
+        position = torch.arrange(0, max_length, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arrange(0, embed_size, 2).float() * (-math.log(10000.0) / embed_size))
+        self.encoding[:, 0::2] = torch.sin(position * div_term)
+        self.encoding[:, 1::2] = torch.cos(position * div_term)
+        self.encoding = self.encoding.unsqueeze(0)
+
+    def forward(self, x):
+        return x + self.encoding[:, :x.size(1)]
+
 class TransformerBlock(nn.Module):
-    def __init__(self, embed_size, heads, dropout, forward_expansion):
+    def __init__(self, embed_size, num_layers, heads, vocab_size, max_length, dropout, forward_expansion):
         super(TransformerBlock, self).__init__()
+        self.word_embedding = nn.Embedding(vocab_size, embed_size)
+        self.position_embedding = nn.Embedding(max_length, embed_size)
         self.attention = SelfAttention(embed_size, heads)
         self.norm1 = nn.LayerNorm(embed_size)
         self.norm2 = nn.LayerNorm(embed_size)
@@ -62,7 +82,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         self.embed_size = embed_size
         self.word_embedding = nn.Embedding(vocab_size, embed_size)
-        self.position_embedding = nn.Embedding(max_length, embed_size)
+        self.position_embedding = PositionalEncoding(embed_size, max_length)
         self.layers = nn.ModuleList(
             [
                 TransformerBlock(embed_size, heads, dropout, forward_expansion)
@@ -74,11 +94,9 @@ class Transformer(nn.Module):
 
     def forward(self, x, mask):
         N, seq_length = x.shape
-        positions = torch.arange(0, seq_length).expand(N, seq_length).to(x.device)
-        out = self.dropout(self.word_embedding(x) + self.position_embedding(positions))
-
+        out = self.word_embedding(x)
+        out = self.position_embedding(x)
         for layer in self.layers:
             out = layer(out, out, out, mask)
-
         out = self.fc_out(out)
         return out
